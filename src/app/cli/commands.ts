@@ -18,6 +18,7 @@ import { resolveAgentOverrides } from './helpers.js';
 import { repertoireAddCommand } from '../../commands/repertoire/add.js';
 import { repertoireRemoveCommand } from '../../commands/repertoire/remove.js';
 import { repertoireListCommand } from '../../commands/repertoire/list.js';
+import { reviewPostCommand } from '../../commands/review/post.js';
 
 program
   .command('run')
@@ -175,6 +176,24 @@ program
     } else {
       success(`Purged ${deleted.length} file(s): ${deleted.join(', ')}`);
     }
+  });
+
+const review = program
+  .command('review')
+  .description('Review utilities');
+
+review
+  .command('post')
+  .description('Post latest review summary as a PR comment')
+  .option('--run <slug>', 'Specific run slug to post')
+  .option('--pr <number>', 'PR number (auto-detected from current branch if omitted)')
+  .option('--dry-run', 'Preview comment without posting')
+  .action(async (opts: { run?: string; pr?: string; dryRun?: boolean }) => {
+    await reviewPostCommand(resolvedCwd, {
+      run: opts.run,
+      pr: opts.pr ? parseInt(opts.pr, 10) : undefined,
+      dryRun: opts.dryRun,
+    });
   });
 
 const repertoire = program
