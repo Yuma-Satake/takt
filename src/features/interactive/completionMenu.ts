@@ -9,10 +9,22 @@ import chalk from 'chalk';
 import { getDisplayWidth, truncateText } from '../../shared/utils/text.js';
 
 const SEPARATOR_CHAR = '─';
-const DEFAULT_COMMAND_COLUMN_WIDTH = 24;
 const LEFT_PADDING = 2;
 const DESC_GAP = 2;
 const MIN_COMMAND_WIDTH = 8;
+
+/**
+ * A single entry in the completion menu.
+ *
+ * - `value` is the display text (also used as buffer replacement when `applyValue` is absent).
+ * - `description` is an optional short label shown next to the command.
+ * - `applyValue` overrides `value` as the buffer replacement (e.g. to append a trailing space).
+ */
+export interface CompletionCandidate {
+  readonly value: string;
+  readonly description?: string;
+  readonly applyValue?: string;
+}
 
 /**
  * Render completion menu lines (pure function).
@@ -20,11 +32,7 @@ const MIN_COMMAND_WIDTH = 8;
  * Returns an array of styled strings: separator line + one line per candidate.
  */
 export const renderCompletionMenu = (
-  candidates: readonly {
-    readonly value: string;
-    readonly description?: string;
-    readonly applyValue?: string;
-  }[],
+  candidates: readonly CompletionCandidate[],
   selectedIndex: number,
   termWidth: number,
 ): readonly string[] => {
@@ -34,10 +42,7 @@ export const renderCompletionMenu = (
     (max, entry) => Math.max(max, getDisplayWidth(entry.value)),
     0,
   );
-  const commandColWidth = Math.min(
-    Math.max(maxCommandDisplayWidth + 2, MIN_COMMAND_WIDTH),
-    Math.max(DEFAULT_COMMAND_COLUMN_WIDTH, maxCommandDisplayWidth + 2),
-  );
+  const commandColWidth = Math.max(maxCommandDisplayWidth + 2, MIN_COMMAND_WIDTH);
   const availableForRow = Math.max(termWidth - LEFT_PADDING, 0);
   const clampedCommandCol = Math.min(commandColWidth, availableForRow);
   const descMaxWidth = availableForRow - clampedCommandCol - DESC_GAP;

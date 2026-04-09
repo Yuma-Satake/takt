@@ -11,6 +11,7 @@ import * as readline from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
 import { createCompletionController } from './completionController.js';
+import type { CompletionCandidate } from './completionMenu.js';
 
 /** Escape sequences for terminal protocol control */
 const PASTE_BRACKET_ENABLE = '\x1B[?2004h';
@@ -273,13 +274,7 @@ export const createEscapeParser = (
 export function readMultilineInput(
   prompt: string,
   options?: {
-    completionProvider?: (
-      context: { buffer: string },
-    ) => readonly {
-      readonly value: string;
-      readonly description?: string;
-      readonly applyValue?: string;
-    }[];
+    completionProvider?: (context: { buffer: string }) => readonly CompletionCandidate[];
   },
 ): Promise<string | null> {
   if (!process.stdin.isTTY) {
@@ -375,33 +370,43 @@ export function readMultilineInput(
     // --- Completion menu helpers ---
 
     /**
-     * Count display rows between two arbitrary buffer positions.
+     * Count display rows between two buffer positions.
+     *
+     * Handles both soft-wrapped rows within a logical line and hard
+     * newlines separating logical lines. Arguments are normalized, so
+     * `from` and `to` may be passed in either order.
      */
-    function countDisplayRowsBetweenPositions(from: number, to: number): number {
-      if (from >= to) return 0;
+    function countDisplayRowsBetween(from: number, to: number): number {
+      if (from === to) return 0;
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
       let rows = 0;
-      let pos = from;
-      while (pos < to) {
+      let pos = start;
+      while (pos < end) {
         const rowEnd = getDisplayRowEnd(pos);
-        if (rowEnd >= to) break;
-        const nextChar = buffer[rowEnd];
-        if (nextChar === '\n') {
-          rows++;
-          pos = rowEnd + 1;
-        } else {
-          rows++;
-          pos = rowEnd;
-        }
+        if (rowEnd >= end) break;
+        rows++;
+        pos = buffer[rowEnd] === '\n' ? rowEnd + 1 : rowEnd;
       }
       return rows;
+    }
+
+    /**
+     * Count display rows from the start of the buffer to the cursor position.
+     *
+     * Used to walk the cursor back to the first display row (where the
+     * prompt is drawn) when the buffer has soft-wrapped onto multiple rows.
+     */
+    function countRowsAboveCursor(): number {
+      return countDisplayRowsBetween(0, cursorPos);
     }
 
     /**
      * Count display rows from cursor position to end of buffer.
      */
     function countRowsBelowCursor(): number {
-      const cursorRow = countDisplayRowsBetweenPositions(0, cursorPos);
-      const totalRows = countDisplayRowsBetweenPositions(0, buffer.length);
+      const cursorRow = countDisplayRowsBetween(0, cursorPos);
+      const totalRows = countDisplayRowsBetween(0, buffer.length);
       return totalRows - cursorRow;
     }
 
@@ -411,6 +416,7 @@ export function readMultilineInput(
         getCursorPos: () => cursorPos,
         getTermWidth,
         getTerminalColumn,
+        countRowsAboveCursor,
         countRowsBelowCursor,
       },
       {
@@ -555,22 +561,6 @@ export function readMultilineInput(
       const termCol = getTerminalColumn(cursorPos);
       process.stdout.write(`\x1B[${direction}`);
       process.stdout.write(`\x1B[${termCol}G`);
-    }
-
-    /** Count how many display rows lie between two buffer positions in the same logical line */
-    function countDisplayRowsBetween(from: number, to: number): number {
-      if (from === to) return 0;
-      const start = Math.min(from, to);
-      const end = Math.max(from, to);
-      let count = 0;
-      let pos = start;
-      while (pos < end) {
-        const nextRowStart = getDisplayRowEnd(pos);
-        if (nextRowStart >= end) break;
-        pos = nextRowStart;
-        count++;
-      }
-      return count;
     }
 
     function moveCursorToLogicalLineStart(): void {
@@ -811,7 +801,6 @@ export function readMultilineInput(
               return;
             }
 
-            // Tab: apply completion
             if (ch === '\t') {
               if (completion.getState()) {
                 completion.apply();
@@ -822,14 +811,14 @@ export function readMultilineInput(
             // Submit
             if (ch === '\r') {
               const compState = completion.getState();
-              if (compState && compState.candidates.length > 0) {
+              if (compState) {
                 const selected = compState.candidates[compState.selectedIndex];
                 if (selected) {
                   buffer = selected.value;
                   cursorPos = buffer.length;
                 }
               }
-              
+
               completion.hide();
               process.stdout.write('\n');
               cleanup();

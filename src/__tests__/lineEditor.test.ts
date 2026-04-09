@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseInputData, createEscapeParser, type InputCallbacks } from '../features/interactive/lineEditor.js';
+import type { CompletionCandidate } from '../features/interactive/completionMenu.js';
 
 function createCallbacks(): InputCallbacks & { calls: string[] } {
   const calls: string[] = [];
@@ -29,11 +30,7 @@ const TEST_COMPLETION_VALUES = ['/play', '/go', '/retry', '/replay', '/cancel', 
 
 const testCompletionProvider = (
   { buffer }: { buffer: string },
-): readonly {
-  readonly value: string;
-  readonly description?: string;
-  readonly applyValue?: string;
-}[] => {
+): readonly CompletionCandidate[] => {
   if (!buffer.startsWith('/') || buffer.includes('\n')) {
     return [];
   }
@@ -288,13 +285,7 @@ describe('readMultilineInput cursor navigation', () => {
   async function callReadMultilineInput(
     prompt: string,
     options?: {
-      completionProvider?: (
-        context: { buffer: string },
-      ) => readonly {
-        readonly value: string;
-        readonly description?: string;
-        readonly applyValue?: string;
-      }[];
+      completionProvider?: (context: { buffer: string }) => readonly CompletionCandidate[];
     },
   ): Promise<string | null> {
     const { readMultilineInput } = await import('../features/interactive/lineEditor.js');
@@ -1252,7 +1243,8 @@ describe('readMultilineInput cursor navigation', () => {
     });
 
     it('should repaint wrapped suffix completion from the prompt row on Tab', async () => {
-      // Given: narrow terminal width wraps "note /g" before Tab applies "note /go "
+      // Given: narrow terminal width wraps "note /g" (7 chars, prompt '> ' = 2)
+      // across two display rows before Tab applies "note /go ".
       const suffixCompletionProvider = ({ buffer }: { buffer: string }) =>
         buffer === 'note /g'
           ? [{
@@ -1270,11 +1262,15 @@ describe('readMultilineInput cursor navigation', () => {
       expect(result).toBe('note /go ');
       const appliedBufferIndex = stdoutCalls.lastIndexOf('note /go ');
       expect(appliedBufferIndex).toBeGreaterThan(3);
+      // Immediately before repainting the new buffer the controller must
+      // walk the cursor back to the first display row of the buffer (the
+      // prompt row), return to column 1, step past the prompt, and clear
+      // the rest of the screen so the stale wrapped text is erased.
       expect(stdoutCalls.slice(appliedBufferIndex - 4, appliedBufferIndex)).toEqual([
-        '\r\n',
-        '\x1B[J',
         expect.stringMatching(/^\x1B\[\d+A$/),
-        '\x1B[3G',
+        '\r',
+        '\x1B[2C',
+        '\x1B[J',
       ]);
     });
 

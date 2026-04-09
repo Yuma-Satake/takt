@@ -13,7 +13,21 @@ import {
   renderCompletionMenu,
   writeCompletionMenu,
   clearCompletionMenu,
+  type CompletionCandidate,
 } from './completionMenu.js';
+
+interface CompletionState {
+  readonly candidates: readonly CompletionCandidate[];
+  selectedIndex: number;
+}
+
+export interface CompletionController {
+  readonly getState: () => CompletionState | null;
+  readonly update: () => void;
+  readonly hide: () => void;
+  readonly moveSelection: (delta: number) => void;
+  readonly apply: () => void;
+}
 
 /**
  * Create a completion controller bound to a line editor instance.
@@ -24,6 +38,7 @@ export const createCompletionController = (
     getCursorPos: () => number;
     getTermWidth: () => number;
     getTerminalColumn: (pos: number) => number;
+    countRowsAboveCursor: () => number;
     countRowsBelowCursor: () => number;
   },
   mutators: {
@@ -31,35 +46,9 @@ export const createCompletionController = (
     setCursorPos: (value: number) => void;
   },
   promptWidth: number,
-  completionProvider?: (
-    context: { buffer: string },
-  ) => readonly {
-    readonly value: string;
-    readonly description?: string;
-    readonly applyValue?: string;
-  }[],
-): {
-  readonly getState: () => {
-    readonly candidates: readonly {
-      readonly value: string;
-      readonly description?: string;
-      readonly applyValue?: string;
-    }[];
-    selectedIndex: number;
-  } | null;
-  readonly update: () => void;
-  readonly hide: () => void;
-  readonly moveSelection: (delta: number) => void;
-  readonly apply: () => void;
-} => {
-  let completionState: {
-    readonly candidates: readonly {
-      readonly value: string;
-      readonly description?: string;
-      readonly applyValue?: string;
-    }[];
-    selectedIndex: number;
-  } | null = null;
+  completionProvider?: (context: { buffer: string }) => readonly CompletionCandidate[],
+): CompletionController => {
+  let completionState: CompletionState | null = null;
 
   /**
    * Render current completionState to the terminal and restore cursor column.
@@ -103,12 +92,10 @@ export const createCompletionController = (
       return;
     }
 
-    if (completionState) {
-      const clampedIndex = Math.min(completionState.selectedIndex, candidates.length - 1);
-      completionState = { candidates, selectedIndex: clampedIndex };
-    } else {
-      completionState = { candidates, selectedIndex: 0 };
-    }
+    const selectedIndex = completionState
+      ? Math.min(completionState.selectedIndex, candidates.length - 1)
+      : 0;
+    completionState = { candidates, selectedIndex };
 
     redraw();
   };
@@ -125,6 +112,10 @@ export const createCompletionController = (
 
   /**
    * Apply the selected completion value to the buffer.
+   *
+   * Correctly returns the cursor to the first display row of the prompt
+   * even when the previous buffer had soft-wrapped onto multiple rows,
+   * then clears everything below before repainting the new buffer.
    */
   const apply = (): void => {
     if (!completionState) return;
@@ -132,16 +123,28 @@ export const createCompletionController = (
     if (!selected) return;
 
     const newBuffer = selected.applyValue ?? selected.value;
+    const rowsAbove = accessors.countRowsAboveCursor();
     const rowsBelow = accessors.countRowsBelowCursor();
 
+    // Remove the completion menu drawn below the input.
     clearCompletionMenu(rowsBelow);
 
-    process.stdout.write(`\x1B[${promptWidth + 1}G`);
+    // Walk back up to the first display row of the buffer (the prompt row).
+    if (rowsAbove > 0) {
+      process.stdout.write(`\x1B[${rowsAbove}A`);
+    }
+    // Return to column 1 then step past the prompt.
+    process.stdout.write('\r');
+    if (promptWidth > 0) {
+      process.stdout.write(`\x1B[${promptWidth}C`);
+    }
+    // Clear everything from the cursor to the end of the screen so stale
+    // wrapped buffer content does not remain visible.
+    process.stdout.write('\x1B[J');
 
     mutators.setBuffer(newBuffer);
     mutators.setCursorPos(newBuffer.length);
     process.stdout.write(newBuffer);
-    process.stdout.write('\x1B[K');
 
     completionState = null;
   };
